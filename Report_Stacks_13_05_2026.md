@@ -334,16 +334,16 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; fi
 ```
 
 
-**Impact of finding (short term):**
+## Impact of Finding (short term)
 Immediate compromise of the affected signer node. An attacker can execute an Eclipse Attack, forcing the node to sign invalid transactions or perform Double Spending. Alternatively, the attacker can silently remove the node from the consensus pool by sending a malicious JSON, resulting in a targeted Permanent DoS (Zombie Node).
 
-**Impact of finding (long term):**
+## Impact of Finding (long term)
 If a DNS hijacking attack is mounted against the default RPC endpoints used by multiple Stacks Signers simultaneously, an attacker could hijack a significant percentage of the network's consensus weight. This would allow the attacker to arbitrarily validate fraudulent Nakamoto blocks, causing systemic loss of funds, manipulating DeFi yields, and severely damaging trust in the Stacks L1 ecosystem.
 
-**Mitigation suggestions (short term):**
+## Mitigation Suggestions (short term)
 Enforce Transport Layer Security strictly within the `Reqwest` client builder in `stacks_client.rs`. Reject any `http://` schema configurations unless the bound IP is explicitly `127.0.0.1` or `localhost`. Implement strict Certificate Pinning for known RPC nodes.
 
-**Mitigation suggestions (long term):**
+## Mitigation Suggestions (long term)
 Implement Cryptographic Proof Verification. The Signer logic must decouple from "Blind Trust" in network payloads. Before updating `SignerEntries` in `runloop.rs`, the application must verify the Merkle Proof of the provided `stacker_set` against a finalized, trusted Stacks State Root. If the cryptographic proof fails, the payload must be discarded immediately.
 
 **(Optional) Suggested patch:**

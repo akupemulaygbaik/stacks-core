@@ -282,7 +282,6 @@ You will not find a `verify_merkle_proof`, `check_consensus_hash`, or any crypto
         println!("[+] THEFT FINALIZED: End-to-End exploit with live runtime parameters executed successfully.");
         println!("=====================================================================\n");
     }
-}
 ```
 
 4. Execute the test using `cargo test poc_full_killchain_live_data_theft -- --show-output` to observe the node blindly signing dynamically generated (zero-day) payload hashes.

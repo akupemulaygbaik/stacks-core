@@ -1,8 +1,13 @@
+## Title
+Consensus Hijacking and Blind Signing Vulnerability in `stacks-signer` via Unauthenticated RPC
+
 ## Executive Summary of Issue
 A critical architectural vulnerability exists within the `stacks-signer` component where the node relies on unauthenticated, plaintext HTTP communication to fetch its consensus parameters (`stacker_set`), combined with a lack of cryptographic validation in the execution runloop. An attacker capable of intercepting local network traffic (e.g., via ARP Spoofing, DNS Hijacking, or compromised VPC environments) can spoof the RPC response, hijacking the node's internal state. This forces the node to blindly sign arbitrary, malicious Nakamoto blocks (e.g., containing double-spends or yield theft) using its highly-privileged `StacksPrivateKey`. In compliance with the rules of engagement, this exploit was fully verified using an isolated local mocked environment (Private Devnet simulation via Rust Integration Tests), avoiding any interaction with mainnet or public testnets.
 
 ## Finding Details
 The vulnerability lies in the intersection of network insecurity and lack of state validation.
+
+**Severity:** Critical
 
 1. **Network Layer:** The `StacksClient` utilizes `reqwest` to poll the Stacks Node API for `RewardSet` and configuration data. This traffic does not enforce HTTPS/mTLS, nor does it implement certificate pinning.
 2. **Logic Layer (Blind Trust):** When the `runloop` invokes `refresh_signer_config` (or similar routines), it parses the raw JSON response and updates the node's authoritative `SignerEntries`. It does not cryptographically verify the Merkle Proof of the `stacker_set` against a finalized state root.

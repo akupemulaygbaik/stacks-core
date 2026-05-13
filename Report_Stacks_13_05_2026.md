@@ -20,7 +20,7 @@ The vulnerability lies in the intersection of network insecurity and lack of sta
 
 The issue in this file is the **Hardcoded Plaintext HTTP (CWE-295)**, which allows an attacker to intercept and modify network traffic.
 
-* **Location 1: Hardcoded HTTP Scheme**
+* **Location 1:** Hardcoded HTTP Scheme**
 In the `From<&GlobalConfig>` and `new()` implementation functions, the system explicitly forces the use of `http://` without the option for `https://`.
 
 
@@ -34,7 +34,7 @@ In the `From<&GlobalConfig>` and `new()` implementation functions, the system ex
 ```
 
 
-* **Location 2: Blind JSON Parsing in `get_reward_set**`
+* **Location 2:** Blind JSON Parsing in `get_reward_set**`
 In the `get_reward_set()` function, the client fetches data from the Stacks API endpoint and directly returns the parsed JSON result without performing any authenticity checks (such as matching hashes or certificates).
 
 
@@ -60,7 +60,7 @@ let send_request = || {
 
 This is where the fatal **Logic Flaw (CWE-345)** occurs. The consensus engine (`runloop.rs`) receives data from the client and treats it as "absolute truth" without verifying the cryptographic proof (Merkle Proof).
 
-* **Location 1: Swallowing Data Without Verification in `get_parsed_reward_set**`
+* **Location 1:** Swallowing Data Without Verification in `get_parsed_reward_set**`
 This function calls `get_reward_set_signers` from the client, and if there is data (spoofed or not), it immediately converts it into valid `SignerEntries`.
 
 
@@ -75,7 +75,7 @@ let entries = SignerEntries::parse(self.config.network.is_mainnet(), &signers).u
 ```
 
 
-* **Location 2: Toxic State Injection in `refresh_signer_config**`
+* **Location 2:** Toxic State Injection in `refresh_signer_config**`
 This is the point where the exploit execution (our Phase 1) succeeds. This function takes the poisoned configuration from `get_signer_config`, creates a new Signer instance, and injects it into `self.stacks_signers` (the consensus memory).
 
 

